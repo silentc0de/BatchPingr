@@ -1,6 +1,6 @@
 # ⚡ BatchPingr — Compiled Version 3 (✨ Final Release)
 
-**BatchPingr** is a fast, lightweight URL and .onion link validation tool that sends **mass HTTP HEAD** requests to check which links are alive — perfect for uptime or mirror checks 🌍  
+**BatchPingr** is a fast, lightweight URL and .onion link validation tool that sends **mass HTTP HEAD** requests to check which links are alive — perfect for uptime or mirror checks 🌍  Works on Android
 Built in collaboration with **ChatGPT 4_turbo 🤖**
 
 ---
