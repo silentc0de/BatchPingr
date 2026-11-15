@@ -100,7 +100,9 @@ PY
   # Keep private key local until a verified external login; do not prematurely delete.
 }
 ssh_service(){
-  sshd -t && systemctl enable --now ssh && systemctl is-active --quiet ssh
+  sshd -t && systemctl enable --now ssh && systemctl is-active --quiet ssh || return 1
+  echo 'SERVER HOST FINGERPRINT (compare out of band when connecting):'
+  ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub || true
 }
 gate(){
   echo
@@ -169,6 +171,34 @@ aide_setup(){
   echo 'AIDE installed. DO NOT call its baseline clean until forensic verification.'
   command -v aide && echo 'Run and review aideinit separately after verifying server trust.'
 }
+optional_observers(){
+  if apt-cache show crowdsec >/dev/null 2>&1; then
+    timeout 240 apt-get -o DPkg::Lock::Timeout=30 install -y crowdsec || return 3
+    systemctl enable --now crowdsec || return 3
+    echo 'CrowdSec detection engine installed; bouncer NOT activated, no ban enforcement claimed.'
+  else
+    warn 'CrowdSec unavailable in configured repositories; cannot install trusted package automatically.'
+  fi
+  echo 'OpenSnitch GUI approval deferred until authenticated remote interface exists; UFW outbound deny will enforce isolation.'
+  echo 'AEGIS deferred: verified artifact/source not available, do not substitute an unknown program.'
+  echo 'Cloudflare Access, VPN and provider firewall are external integration tasks.'
+}
+sandbox_template(){
+  install -d -m 700 /root/vps-hardening-examples
+  cat >/root/vps-hardening-examples/app-override.conf <<'HARDEN'
+[Service]
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# Specify application-specific ReadWritePaths before applying.
+HARDEN
+  chmod 600 /root/vps-hardening-examples/app-override.conf
+}
 local_monitor(){
   cat >/usr/local/sbin/vps-health <<'HEALTH'
 #!/usr/bin/env bash
@@ -226,6 +256,8 @@ step 'Install/configure/test Fail2Ban sshd jail' fail2ban
 step 'Configure auditd and persistent journal' auditing
 step 'Enable unattended upgrades (blocked after final outbound deny)' updates
 step 'Check AppArmor' apparmor_check
+step 'CrowdSec detection and external integration checks' optional_observers
+step 'Create app-specific systemd sandbox template' sandbox_template
 step 'Install AIDE; defer baseline trust assessment' aide_setup
 step 'Enable local 5-minute monitoring' local_monitor
 step 'UFW deny inbound/outbound, permit temporary inbound SSH' firewall
