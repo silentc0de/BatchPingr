@@ -12,8 +12,8 @@
 7. **Mandatory manual gate:** independently download archive, decrypt on your own trusted client, verify private/public match and verify a fresh SSH key connection from a second device. Type VERIFIED-KEY-LOGIN only after verifying. If gate skipped, SSH password disablement is deferred, and the script logs warning. It doesn't manufacture this proof.
 8. Disable SSH password and keyboard-interactive authentication, leaving root key authentication temporarily possible. Verify effective sshd settings.
 9. Configure Fail2Ban sshd jail, auditd, persistent journaling, update timer (downloads require a future approved maintenance window), AppArmor checks, AIDE package only (do not trust baseline before inspection), CrowdSec detection if packaged, local health timer, systemd hardening example.
-10. Enable UFW with default deny incoming/outgoing and temporary inbound SSH rule; do NOT restrict TCP 22 to VPN until VPN access is tested.
-11. Print PASS/FAIL per step and local logs. Failures don't silently claim success. **The firewall step still runs if an earlier noncritical step failed, so independently verify SSH reachability and the console beforehand.**
+10. Enable UFW with default deny incoming/outgoing. Permit temporary public inbound SSH **only if a genuine key login is confirmed and SSH password authentication is verified disabled**. Otherwise **no inbound SSH exception**: provider console recovery is required. Never restrict TCP 22 to VPN until VPN access is tested.
+11. Print PASS/FAIL per step and local logs. Failures don't silently claim success. **The firewall step still runs after an earlier noncritical failure. It intentionally fails closed: without verified key-only login, inbound SSH remains blocked and only the provider console can complete the handoff. Independently verify provider console access and a snapshot beforehand.**
 
 ## Private key handoff risks
 - **Never paste a private key or the unlock secret into edutho.in/Kennynote**. The note is an anonymous shareable web document, not a trusted secret-management vault.
@@ -41,4 +41,4 @@ Download the script from a **pinned GitHub commit** (not mutable main), review i
 - `/var/log/vps-bootstrap/summary.txt`
 - `/var/log/vps-bootstrap/health-last.txt`
 
-Do not confuse successful package installation with proof the VPS was never compromised.
+Before booting a replacement instance, use the provider's edge firewall to restrict administrative access if available; this script cannot protect the period before it starts. Do not confuse successful package installation with proof the VPS was never compromised.
