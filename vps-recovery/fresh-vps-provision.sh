@@ -80,8 +80,12 @@ fd=os.open(sys.argv[2],os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
 with os.fdopen(fd,'w') as f: json.dump(d,f)
 PY
   rm -f "$bundle"
+  if ! command -v ffsend >/dev/null 2>&1 && command -v snap >/dev/null 2>&1; then
+    echo 'ffsend absent; attempting the upstream-recommended snap package before outbound lockdown.'
+    timeout 240 snap install ffsend || true
+  fi
   if ! command -v ffsend >/dev/null 2>&1; then
-    warn 'ffsend is not installed. Encrypted bundle retained locally. No key-only lockdown until one-time handoff succeeds.'
+    warn 'ffsend not available. Encrypted bundle retained locally; handoff and SSH password-lock gate deferred.'
     return 3
   fi
   local output link
