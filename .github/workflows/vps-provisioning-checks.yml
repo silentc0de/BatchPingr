@@ -1,0 +1,28 @@
+name: VPS provisioning static checks
+on:
+  push:
+    branches:
+      - vps-recovery-2026-11-14
+    paths:
+      - 'vps-recovery/**'
+      - '.github/workflows/vps-provisioning-checks.yml'
+permissions:
+  contents: read
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: |
+          bash -n vps-recovery/fresh-vps-provision.sh
+          bash -n vps-recovery/recover-vps.sh
+          bash -n vps-recovery/rapid-lockdown.sh
+      - name: Python syntax
+        run: python3 -m py_compile vps-recovery/decrypt-handoff.py
+      - name: Assert critical security gates
+        run: |
+          grep -q 'VERIFIED-KEY-LOGIN' vps-recovery/fresh-vps-provision.sh
+          grep -q 'ufw default deny outgoing' vps-recovery/fresh-vps-provision.sh
+          grep -q 'PasswordAuthentication no' vps-recovery/fresh-vps-provision.sh
+          grep -q 'ffsend upload --downloads 1' vps-recovery/fresh-vps-provision.sh
