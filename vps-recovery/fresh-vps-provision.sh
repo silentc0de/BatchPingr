@@ -235,7 +235,15 @@ TIMER
 firewall(){
   command -v ufw && systemctl is-active --quiet ssh || { echo 'Cannot safely apply firewall: ssh inactive'; return 1; }
   ss -lnt | grep -Eq ':22[[:space:]]' || { echo 'Cannot safely apply firewall: port 22 absent'; return 1; }
-  ufw allow 22/tcp comment 'SSH recovery until VPN verified' &&
+  if [[ -s "$BASE/verified-key-login" ]] &&
+     [[ "$(sshd -T | awk '$1=="passwordauthentication"{print $2}')" == no ]] &&
+     [[ "$(sshd -T | awk '$1=="kbdinteractiveauthentication"{print $2}')" == no ]]; then
+    ufw allow 22/tcp comment 'TEMPORARY key-only SSH until VPN verified' || return 1
+    echo 'Verified key-only SSH: temporary TCP 22 access permitted.'
+  else
+    echo 'SECURITY FAIL-SAFE: no verified key-only login. Closing inbound port 22; use provider console until secure handoff is complete.'
+    ufw --force delete allow 22/tcp || true
+  fi
   ufw default deny incoming && ufw default deny outgoing &&
   ufw logging on && ufw --force enable && ufw status verbose
 }
@@ -260,7 +268,7 @@ step 'CrowdSec detection and external integration checks' optional_observers
 step 'Create app-specific systemd sandbox template' sandbox_template
 step 'Install AIDE; defer baseline trust assessment' aide_setup
 step 'Enable local 5-minute monitoring' local_monitor
-step 'UFW deny inbound/outbound, permit temporary inbound SSH' firewall
+step 'UFW deny inbound/outbound; permit SSH only if key-only login verified' firewall
 step 'Final checks' status
 echo "SUMMARY: $(cat "$SUMMARY" | tail -n 30)"
 echo "Saved logs: $LOG ; $SUMMARY"
