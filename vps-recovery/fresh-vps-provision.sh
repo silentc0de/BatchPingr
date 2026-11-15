@@ -253,8 +253,8 @@ status(){
   ufw status verbose || true
   echo 'PENDING: external provider edge rules, OpenSnitch remote GUI, verified AEGIS, CrowdSec vetted bouncer, cloud MFA, VPN-only SSH, separate admin.'
 }
-step 'Capture evidence before any changes' evidence
 step 'Generate Ed25519 key and authorize public key for root' keys
+step 'Capture initial security evidence before installing tools' evidence
 step 'Install trusted Ubuntu security dependencies' bootstrap_packages
 step 'Upload encrypted one-use key handoff if ffsend is available' delivery
 step 'Start and validate SSH daemon' ssh_service
