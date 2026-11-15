@@ -56,6 +56,44 @@ keys(){
   ssh-keygen -lf "$key.pub"
   echo 'WARNING: key is currently stored UNENCRYPTED locally until encrypted handoff. Do not delete until delivery succeeds.'
 }
+early_firewall(){
+  # Never activate until ssh listener and existing authorized key have been checked.
+  # If UFW is absent, install that one trusted package while guest egress is still available.
+  if ! command -v ufw >/dev/null; then
+    timeout 180 apt-get -o DPkg::Lock::Timeout=30 update || return 1
+    timeout 180 apt-get -o DPkg::Lock::Timeout=30 install -y ufw || return 1
+  fi
+  command -v sshd >/dev/null || { echo 'FAIL-SAFE: sshd missing'; return 1; }
+  sshd -t || return 1
+  systemctl is-active --quiet ssh || { echo 'FAIL-SAFE: SSH not active'; return 1; }
+  ss -lnt | grep -Eq ':22[[:space:]]' || { echo 'FAIL-SAFE: port 22 absent'; return 1; }
+  [[ -s /root/.ssh/authorized_keys ]] || { echo 'FAIL-SAFE: no authorized SSH key'; return 1; }
+  for p in /etc/ufw/user.rules /etc/ufw/user6.rules; do backup "$p"; done
+  # Narrow initial exposure: only existing SSH inbound and temporary provisioning traffic outbound.
+  # These outbound exceptions are intentional and temporary, but are NOT destination-pinned.
+  ufw allow 22/tcp comment 'TEMP SSH before verified key-only/VPN'
+  ufw default deny incoming
+  ufw default deny outgoing
+  ufw default deny routed
+  ufw allow out 53/udp comment 'TEMP provisioning DNS'
+  ufw allow out 53/tcp comment 'TEMP provisioning DNS TCP'
+  ufw allow out 80/tcp comment 'TEMP Ubuntu HTTP repositories'
+  ufw allow out 443/tcp comment 'TEMP HTTPS provisioning'
+  ufw logging on
+  ufw --force enable
+  ufw status verbose
+  [[ "$(ufw status | head -1)" == 'Status: active' ]]
+}
+close_bootstrap_egress(){
+  # Remove the temporary broad outbound permissions even if later provisioning stages failed.
+  command -v ufw >/dev/null || return 1
+  ufw --force delete allow out 53/udp || true
+  ufw --force delete allow out 53/tcp || true
+  ufw --force delete allow out 80/tcp || true
+  ufw --force delete allow out 443/tcp || true
+  ufw default deny outgoing || return 1
+  ufw status verbose
+}
 bootstrap_packages(){
   timeout 180 apt-get -o DPkg::Lock::Timeout=30 update || return
   timeout 600 apt-get -o DPkg::Lock::Timeout=30 install -y openssh-server openssh-client ufw fail2ban nftables auditd audispd-plugins apparmor apparmor-utils unattended-upgrades aide python3-cryptography ca-certificates curl jq || return
@@ -255,6 +293,11 @@ status(){
 }
 step 'Generate Ed25519 key and authorize public key for root' keys
 step 'Capture initial security evidence before installing tools' evidence
+step 'EARLY UFW: deny incoming/outgoing; temporary restricted-port provisioning egress' early_firewall
+if ! ufw status 2>/dev/null | grep -q '^Status: active'; then
+  echo 'CRITICAL: firewall could not be enabled. Abort before downloading/installing additional tools.'
+  exit 1
+fi
 step 'Install trusted Ubuntu security dependencies' bootstrap_packages
 step 'Upload encrypted one-use key handoff if ffsend is available' delivery
 step 'Start and validate SSH daemon' ssh_service
@@ -268,7 +311,8 @@ step 'CrowdSec detection and external integration checks' optional_observers
 step 'Create app-specific systemd sandbox template' sandbox_template
 step 'Install AIDE; defer baseline trust assessment' aide_setup
 step 'Enable local 5-minute monitoring' local_monitor
-step 'UFW deny inbound/outbound; permit SSH only if key-only login verified' firewall
+step 'Close all temporary bootstrap outbound allowances' close_bootstrap_egress
+step 'Final UFW deny inbound/outbound; permit SSH only if key-only login verified' firewall
 step 'Final checks' status
 echo "SUMMARY: $(cat "$SUMMARY" | tail -n 30)"
 echo "Saved logs: $LOG ; $SUMMARY"
