@@ -91,8 +91,8 @@ PY
   printf '%s\n' "$link" > "$BASE/delivery-link.txt"
   chmod 600 "$BASE/delivery-link.txt"
   echo "ONE-DOWNLOAD URL: $link"
-  echo "SEPARATE DECRYPTION SECRET (SAVE OFFLINE; NEVER POST ON EDUTHO): $pass"
-  echo 'Only the encrypted outer package is uploaded. Save the secret separately.'
+  printf '%s\n' "SEPARATE DECRYPTION SECRET (SAVE OFFLINE; NEVER POST ON EDUTHO): $pass" >/dev/tty
+  echo 'Only the encrypted outer package is uploaded. Save the secret separately. The secret is NOT written to the installer log.'
   # Keep private key local until a verified external login; do not prematurely delete.
 }
 ssh_service(){
@@ -103,8 +103,9 @@ gate(){
   echo 'MANDATORY: download the one-use package to YOUR device, save the separate secret, decrypt, and verify a real SSH key login from another device.'
   echo 'Do NOT enter the gate phrase until a fresh key-based session works and host fingerprint is verified independently.'
   read -r -p 'Type VERIFIED-KEY-LOGIN to turn off SSH passwords, or press ENTER to defer: ' reply
+  [[ -f "$BASE/delivery-link.txt" ]] || { warn 'No confirmed ffsend handoff link exists. Password lockdown deferred.'; return 3; }
   [[ "$reply" == VERIFIED-KEY-LOGIN ]] || { warn 'Key login not verified; keeping current SSH auth. Further tools continue.'; return 3; }
-  touch "$BASE/verified-key-login"; chmod 600 "$BASE/verified-key-login"
+  printf 'verified\n' > "$BASE/verified-key-login"; chmod 600 "$BASE/verified-key-login"
 }
 ssh_lock(){
   [[ -s "$BASE/verified-key-login" ]] || return 3
@@ -122,6 +123,8 @@ CONF
   sshd -T | grep -E '^(passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication|permitrootlogin) '
   [[ "$(sshd -T | awk '$1=="passwordauthentication"{print $2}')" == no ]] || return 1
   [[ "$(sshd -T | awk '$1=="kbdinteractiveauthentication"{print $2}')" == no ]] || return 1
+  rm -f "$BASE/vps-initial-access"
+  echo 'Local private key deleted after verified external login; encrypted backup retained locally.'
 }
 fail2ban(){
   mkdir -p /etc/fail2ban/jail.d
