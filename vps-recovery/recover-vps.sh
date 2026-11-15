@@ -96,5 +96,150 @@ PY
    echo 'Observation mode only. Remote authenticated GUI required for approval prompts.' ;;
  deny-egress)
    echo 'REFUSED: headless default-deny without authenticated connected GUI and rollback would cause lockout.'; exit 4 ;;
- *) echo 'Usage: bash recover-vps.sh audit|recover|lock-ssh|install-opensnitch|deny-egress'; exit 2 ;;
+
+ security-prep)
+   # Must precede 'recover', because 'recover' intentionally closes outbound traffic.
+   echo '=== Install monitoring and audit packages BEFORE outbound lockdown ==='
+   apt-get update
+   DEBIAN_FRONTEND=noninteractive apt-get install -y auditd audispd-plugins unattended-upgrades needrestart apparmor apparmor-utils jq
+   systemctl enable --now auditd
+   mkdir -p /etc/audit/rules.d
+   cat > /etc/audit/rules.d/99-vps-identity.rules <<'AUDIT'
+-w /etc/passwd -p wa -k vps-identity
+-w /etc/group -p wa -k vps-identity
+-w /etc/shadow -p wa -k vps-credentials
+-w /etc/sudoers -p wa -k vps-sudo
+-w /etc/sudoers.d/ -p wa -k vps-sudo
+-w /etc/ssh/sshd_config -p wa -k vps-ssh
+-w /etc/ssh/sshd_config.d/ -p wa -k vps-ssh
+AUDIT
+   augenrules --load
+   echo '=== Persistent journal ==='
+   mkdir -p /var/log/journal
+   systemd-tmpfiles --create --prefix /var/log/journal
+   systemctl restart systemd-journald
+   echo '=== Automatic security updates, no automatic reboot ==='
+   cat > /etc/apt/apt.conf.d/20auto-upgrades <<'UPDATES'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+UPDATES
+   cat > /etc/apt/apt.conf.d/90-vps-no-autoreboot <<'UPDATES'
+Unattended-Upgrade::Automatic-Reboot "false";
+UPDATES
+   systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
+   echo 'Note: after outbound default-deny, unattended-upgrades will NOT be able to fetch updates. Approved update windows are necessary.'
+   echo '=== Local-only health monitoring ==='
+   cat > /usr/local/sbin/vps-security-health <<'HEALTH'
+#!/usr/bin/env bash
+set -u
+f=/var/log/vps-recovery/health-last.txt
+{
+  date -u
+  echo '=== Firewall ==='
+  ufw status verbose || true
+  echo '=== Security services ==='
+  for s in ssh fail2ban auditd apparmor; do systemctl is-active "$s" || true; done
+  echo '=== Socket listeners ==='
+  ss -tlnp || true
+  echo '=== Disk ==='
+  df -h / /var/log || true
+  echo '=== Updates pending ==='
+  test ! -f /var/run/reboot-required || echo 'REBOOT REQUIRED'
+} > "$f"
+chmod 600 "$f"
+HEALTH
+   chmod 700 /usr/local/sbin/vps-security-health
+   cat > /etc/systemd/system/vps-security-health.service <<'SERVICE'
+[Unit]
+Description=Local VPS security status report
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vps-security-health
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/vps-recovery
+ProtectHome=true
+PrivateTmp=true
+SERVICE
+   cat > /etc/systemd/system/vps-security-health.timer <<'TIMER'
+[Unit]
+Description=Periodic local VPS security status
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+[Install]
+WantedBy=timers.target
+TIMER
+   systemctl daemon-reload
+   systemctl enable --now vps-security-health.timer
+   echo 'Health report: /var/log/vps-recovery/health-last.txt'
+   echo 'Audit query: ausearch -k vps-ssh; for commands see audit coverage caveats in README.'
+   ;;
+ install-crowdsec)
+   # Local engine only. Firewall bouncer requires confirmed backend and rule integration.
+   # Restrictive egress may prevent repository use or external reputation feeds.
+   if ! apt-cache show crowdsec >/dev/null 2>&1; then
+     echo 'CrowdSec not available in configured trusted apt repos. Refusing unverified curl|sh.'
+     exit 3
+   fi
+   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-download crowdsec
+   systemctl enable --now crowdsec
+   cscli version || true
+   echo 'CrowdSec engine installed. No bouncer installed, NO automatic block enforcement yet.'
+   echo 'For blocking, manually verify compatible nftables/iptables backend and bouncer package.'
+   echo 'CrowdSec global reputation lists need approved outbound traffic.'
+   ;;
+ restrict-ssh)
+   echo 'Restrict SSH source only after a verified key connection and a tested console recovery route.'
+   echo 'This command adds an ALLOW for a specified /32 (IPv4) or /128 (IPv6), then removes the broad port rule.'
+   read -r -p 'Trusted administrative public IP (numeric IPv4 only): ' admin_ip
+   if ! python3 - "$admin_ip" <<'PY'
+import ipaddress,sys
+x=ipaddress.ip_address(sys.argv[1])
+assert x.version==4 and x.is_global
+PY
+   then echo 'Invalid/non-global IPv4 address'; exit 1; fi
+   read -r -p 'Type VERIFIED-KEY-AND-CONSOLE to enforce source restriction: ' confirmation
+   [ "$confirmation" = VERIFIED-KEY-AND-CONSOLE ] || exit 1
+   ufw allow from "$admin_ip" to any port 22 proto tcp comment 'trusted-admin-ssh'
+   ufw --force delete allow 22/tcp || true
+   ufw status numbered
+   echo 'Verify from that address immediately. Dynamic/mobile IPs may change.'
+   ;;
+ systemd-template)
+   echo 'Creating EXAMPLE hardening drop-in only; NOT applying to SSH, Docker, or running app services.'
+   mkdir -p /root/vps-hardening-examples
+   cat > /root/vps-hardening-examples/app-override.conf <<'HARDEN'
+[Service]
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+# Customize ReadWritePaths and service credentials BEFORE deploying to an app.
+# ReadWritePaths=/var/lib/your-app
+HARDEN
+   chmod 600 /root/vps-hardening-examples/app-override.conf
+   echo 'Example created: /root/vps-hardening-examples/app-override.conf'
+   ;;
+ security-status)
+   echo '=== Nine-layer hardening status ==='
+   echo '[1] CrowdSec'; command -v cscli && cscli version || true
+   echo '[2] Layered firewalls'; ufw status verbose || true; echo 'Provider edge firewall must be checked in hosting account.'
+   echo '[3] SSH source restriction'; ufw status numbered || true
+   echo '[4] Cloudflare Access'; echo 'External setup required. Not installed.'
+   echo '[5] SSH key-only'; sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication|permitrootlogin) ' || true
+   echo '[6] systemd sandbox'; echo 'Per-service deployment required'; systemd-analyze security ssh.service 2>/dev/null | tail -n 3 || true
+   echo '[7] auditd'; systemctl is-active auditd || true
+   echo '[8] unattended upgrades'; systemctl is-enabled apt-daily-upgrade.timer || true
+   echo '[9] 24/7 monitoring'; systemctl is-enabled vps-security-health.timer || true
+   echo 'External HAL/Titus/Dependabot integrations require separate verified accounts and project configuration.'
+   echo '=== Egress policy ==='; ufw status verbose || true
+   ;;
+ *) echo 'Usage: bash recover-vps.sh audit|security-prep|recover|lock-ssh|install-opensnitch|install-crowdsec|restrict-ssh|systemd-template|security-status|deny-egress'; exit 2 ;;
 esac
