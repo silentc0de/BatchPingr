@@ -25,7 +25,7 @@ fetch(){
 stage 'Download pinned recovery helper and syntax-check' fetch
 if [[ ! -s "$SCRIPT" ]]; then echo 'FAIL: helper download not available'; exit 1; fi
 stage 'Preserve pre-change evidence' bash "$SCRIPT" audit
-if [[ "\${1:-}" == --audit-only ]]; then echo "Log: $L"; exit 0; fi
+if [[ "${1:-}" == --audit-only ]]; then echo "Log: $L"; exit 0; fi
 stage 'Install auditd, AppArmor, updates, local monitor (before egress deny)' bash "$SCRIPT" security-prep
 stage 'Write conservative application systemd hardening template' bash "$SCRIPT" systemd-template
 if apt-cache show crowdsec >/dev/null 2>&1; then
