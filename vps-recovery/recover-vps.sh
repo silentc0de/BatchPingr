@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Console-first Ubuntu SSH recovery. Never blocks outbound traffic automatically.
+# Console-first Ubuntu SSH recovery. Blocks NEW outbound connections after package bootstrap.
 set -Eeuo pipefail
 umask 077
 [ "$(id -u)" = 0 ] || { echo 'Run as root in the provider console'; exit 1; }
@@ -30,16 +30,34 @@ case "$mode" in
    report
    cp -a /etc/ssh/sshd_config "/var/log/vps-recovery/sshd-config-$(date -u +%s).bak"
    apt-get update
-   DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server ufw
+   DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server ufw fail2ban python3-systemd
    sshd -t
    systemctl unmask ssh || true
    systemctl enable --now ssh
    ss -tlnp | grep -E ':22[[:space:]]' || { echo 'SSH NOT LISTENING ON 22: inspect service'; exit 1; }
    ufw allow 22/tcp comment 'SSH recovery'
    ufw default deny incoming
-   ufw default allow outgoing
+   # Default egress DENY: no new internet-bound connections initiated by this VPS.
+   # Stateful replies to inbound SSH are normally allowed by UFW's established rules.
+   ufw default deny outgoing
+   ufw logging on
    ufw --force enable
    ufw status verbose
+   echo '=== Configure Fail2Ban SSH jail ==='
+   mkdir -p /etc/fail2ban/jail.d
+   cat > /etc/fail2ban/jail.d/99-vps-ssh.conf <<'JAIL'
+[sshd]
+enabled = true
+backend = systemd
+port = ssh
+maxretry = 5
+findtime = 10m
+bantime = 1h
+JAIL
+   fail2ban-client -t
+   systemctl enable --now fail2ban
+   fail2ban-client status sshd
+   echo 'Outbound policy is DENY. APT, DNS queries, updates and alerts cannot initiate traffic unless separately approved.'
    echo 'Now test remote SSH key login. DO NOT run lock-ssh before success.' ;;
  lock-ssh)
    [ -s /root/.ssh/authorized_keys ] || [ -s /home/kenneth/.ssh/authorized_keys ] || { echo 'No expected keys found'; exit 1; }
@@ -57,11 +75,11 @@ CONF
    sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication) '
    echo 'Test a SECOND SSH key login before closing the current one.' ;;
  install-opensnitch)
-   apt-get update
    if ! apt-cache show opensnitch >/dev/null 2>&1; then
       echo 'Not in configured apt sources; review https://github.com/evilsocket/opensnitch/releases (no unverified downloads).'; exit 3
    fi
-   DEBIAN_FRONTEND=noninteractive apt-get install -y opensnitch
+   echo 'WARNING: Outbound firewall deny will block downloads. This mode will not open outbound access.'
+   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-download opensnitch
    cfg=/etc/opensnitchd/default-config.json
    [ -f "$cfg" ] || { echo 'Daemon config missing'; exit 1; }
    cp -a "$cfg" "/var/log/vps-recovery/opensnitch-$(date -u +%s).bak"
