@@ -20,6 +20,7 @@ stage(){
  sleep 3
 }
 fetch(){
+ rm -f "$SCRIPT"
  curl -fL --connect-timeout 15 --max-time 90 "$URL" -o "$SCRIPT" && bash -n "$SCRIPT"
 }
 stage 'Download pinned recovery helper and syntax-check' fetch
